@@ -93,6 +93,41 @@ type CustomerSku = {
 type PaymentTerm = { id: string; name: string };
 type Product = { id: string; sku: string; name: string };
 
+type CalculationResult = {
+  id: string;
+  contributionMarginPercent: string;
+  contributionProfit: string;
+  netRevenue: string;
+  totalVariableCost: string;
+  alertStatus: string;
+  calculatedAt: string;
+  calculationTrace: {
+    engineVersion: string;
+    inputs: {
+      sellingPrice: string | null;
+      productCost: string | null;
+      shippingCost: string;
+      allocations: { name: string; type: string; rate: string | null; computedAmount: number }[];
+      shippingTerms: string;
+      packageQuantity: number;
+    };
+    intermediates: {
+      revenueBasedAllowances: string;
+      netRevenue: string;
+      totalVariableCost: string;
+      contributionProfit: string;
+    };
+    outputs: {
+      contributionMarginPercent: string;
+      requiredMinimumMargin: string;
+      varianceFromRequired: string;
+      alertStatus: string;
+    };
+    appliedOverrides: string[];
+    dataQuality: { missingSellingPrice: boolean; missingProductCost: boolean };
+  };
+} | null;
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function statusVariant(status: string): "success" | "secondary" | "warning" | "default" {
@@ -589,12 +624,91 @@ function MarginRequirementsTab({
 
 // ─── SKUs Tab ─────────────────────────────────────────────────────────────────
 
+function CalculationPanel({ calc }: { calc: NonNullable<CalculationResult> }) {
+  const t = calc.calculationTrace;
+  const margin = parseFloat(calc.contributionMarginPercent);
+  const required = parseFloat(t.outputs.requiredMinimumMargin);
+  const variance = parseFloat(t.outputs.varianceFromRequired);
+  const varColor = variance >= 0 ? "text-green-600" : "text-red-600";
+
+  return (
+    <div className="space-y-4 text-sm">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-md border border-gray-200 p-3">
+          <div className="text-xs text-gray-500 mb-1">Contribution Margin</div>
+          <div className="text-2xl font-bold">{margin.toFixed(2)}%</div>
+          <div className={`text-xs mt-0.5 ${varColor}`}>
+            {variance >= 0 ? "+" : ""}{variance.toFixed(2)}% vs required {required.toFixed(2)}%
+          </div>
+        </div>
+        <div className="rounded-md border border-gray-200 p-3">
+          <div className="text-xs text-gray-500 mb-1">Contribution Profit</div>
+          <div className="text-2xl font-bold">${parseFloat(calc.contributionProfit).toFixed(4)}</div>
+        </div>
+      </div>
+
+      <div>
+        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Calculation Trace</div>
+        <table className="w-full text-xs">
+          <tbody>
+            <tr className="border-b border-gray-100">
+              <td className="py-1 text-gray-500">Selling Price</td>
+              <td className="py-1 text-right font-mono">{t.inputs.sellingPrice ? `$${t.inputs.sellingPrice}` : "—"}</td>
+            </tr>
+            {t.inputs.allocations.filter(a => ["PERCENT_OF_SELLING_PRICE","PERCENT_OF_NET_REVENUE"].includes(a.type)).map((a, i) => (
+              <tr key={i} className="border-b border-gray-100">
+                <td className="py-1 text-gray-500 pl-3">− {a.name}</td>
+                <td className="py-1 text-right font-mono text-red-600">-${a.computedAmount.toFixed(4)}</td>
+              </tr>
+            ))}
+            <tr className="border-b border-gray-200 font-semibold">
+              <td className="py-1">Net Revenue</td>
+              <td className="py-1 text-right font-mono">${t.intermediates.netRevenue}</td>
+            </tr>
+            <tr className="border-b border-gray-100">
+              <td className="py-1 text-gray-500">Product Cost</td>
+              <td className="py-1 text-right font-mono">{t.inputs.productCost ? `$${t.inputs.productCost}` : "—"}</td>
+            </tr>
+            {t.inputs.allocations.filter(a => !["PERCENT_OF_SELLING_PRICE","PERCENT_OF_NET_REVENUE"].includes(a.type) && a.computedAmount > 0).map((a, i) => (
+              <tr key={i} className="border-b border-gray-100">
+                <td className="py-1 text-gray-500 pl-3">+ {a.name}</td>
+                <td className="py-1 text-right font-mono">${a.computedAmount.toFixed(4)}</td>
+              </tr>
+            ))}
+            <tr className="border-b border-gray-200 font-semibold">
+              <td className="py-1">Total Variable Cost</td>
+              <td className="py-1 text-right font-mono">${t.intermediates.totalVariableCost}</td>
+            </tr>
+            <tr className="font-bold">
+              <td className="py-1">Contribution Profit</td>
+              <td className="py-1 text-right font-mono">${t.intermediates.contributionProfit}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {(t.dataQuality.missingSellingPrice || t.dataQuality.missingProductCost) && (
+        <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+          {t.dataQuality.missingSellingPrice && <div>⚠ Missing selling price — cannot calculate margin</div>}
+          {t.dataQuality.missingProductCost && <div>⚠ Missing product cost — cannot calculate margin</div>}
+        </div>
+      )}
+
+      <div className="text-xs text-gray-400">
+        Calculated {new Date(calc.calculatedAt).toLocaleString()} · Engine v{t.engineVersion}
+      </div>
+    </div>
+  );
+}
+
 function SkusTab({
   customerId,
   canManage,
+  canRunCalcs,
 }: {
   customerId: string;
   canManage: boolean;
+  canRunCalcs: boolean;
 }) {
   const [skus, setSkus] = React.useState<CustomerSku[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -602,6 +716,10 @@ function SkusTab({
   const [addOpen, setAddOpen] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [form, setForm] = React.useState({ productId: "", sellingPrice: "", packageQuantity: "1" });
+  const [calcDialogSku, setCalcDialogSku] = React.useState<CustomerSku | null>(null);
+  const [calcResult, setCalcResult] = React.useState<CalculationResult>(null);
+  const [calcLoading, setCalcLoading] = React.useState(false);
+  const [recalculating, setRecalculating] = React.useState<string | null>(null);
 
   async function load() {
     const [skuRes, prodRes] = await Promise.all([
@@ -643,8 +761,48 @@ function SkusTab({
     await load();
   }
 
+  async function handleRecalculate(skuId: string) {
+    setRecalculating(skuId);
+    try {
+      await fetch(`/api/customers/${customerId}/skus/${skuId}/recalculate`, { method: "POST" });
+      await load();
+    } finally {
+      setRecalculating(null);
+    }
+  }
+
+  async function openCalcDialog(sku: CustomerSku) {
+    setCalcDialogSku(sku);
+    setCalcResult(null);
+    setCalcLoading(true);
+    const res = await fetch(`/api/customers/${customerId}/skus/${sku.id}/calculation`);
+    const data = await res.json();
+    setCalcResult(data.data);
+    setCalcLoading(false);
+  }
+
   return (
     <div className="space-y-4">
+      {/* Calculation detail dialog */}
+      <Dialog open={calcDialogSku != null} onOpenChange={(open) => { if (!open) setCalcDialogSku(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              Calculation — {calcDialogSku?.product.sku} {calcDialogSku?.product.name}
+            </DialogTitle>
+          </DialogHeader>
+          {calcLoading ? (
+            <Skeleton className="h-48 w-full" />
+          ) : calcResult ? (
+            <CalculationPanel calc={calcResult} />
+          ) : (
+            <div className="text-sm text-gray-500 py-4 text-center">
+              No calculation on record. Click &quot;Recalculate&quot; to run the engine.
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {canManage && (
         <div className="flex justify-end">
           <Dialog open={addOpen} onOpenChange={setAddOpen}>
@@ -694,7 +852,7 @@ function SkusTab({
               <TableHead>Pkg Qty</TableHead>
               <TableHead>Alert</TableHead>
               <TableHead>Review</TableHead>
-              {canManage && <TableHead className="w-10" />}
+              <TableHead className="w-32" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -722,18 +880,39 @@ function SkusTab({
                   <TableCell>
                     <Badge variant="secondary">{s.reviewStatus.replace(/_/g, " ")}</Badge>
                   </TableCell>
-                  {canManage && (
-                    <TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1">
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-7 px-2 text-red-500 hover:text-red-700"
-                        onClick={() => handleDelete(s.id)}
+                        className="h-7 px-2 text-xs"
+                        onClick={() => openCalcDialog(s)}
                       >
-                        Remove
+                        View
                       </Button>
-                    </TableCell>
-                  )}
+                      {canRunCalcs && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          disabled={recalculating === s.id}
+                          onClick={() => handleRecalculate(s.id)}
+                        >
+                          {recalculating === s.id ? "…" : "Calc"}
+                        </Button>
+                      )}
+                      {canManage && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs text-red-500 hover:text-red-700"
+                          onClick={() => handleDelete(s.id)}
+                        >
+                          Remove
+                        </Button>
+                      )}
+                    </div>
+                  </TableCell>
                 </TableRow>
               ))
             )}
@@ -755,6 +934,7 @@ export default function CustomerDetailPage() {
   const canManageAllocations = permissions.includes("manage_allocations");
   const canManageMargin = permissions.includes("manage_margin_requirements");
   const canManageSkus = permissions.includes("manage_customer_skus");
+  const canRunCalcs = permissions.includes("run_calculations");
 
   const [customer, setCustomer] = React.useState<Customer | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -891,7 +1071,7 @@ export default function CustomerDetailPage() {
 
           {/* SKUs */}
           <TabsContent value="skus" className="mt-4">
-            <SkusTab customerId={customerId} canManage={canManageSkus} />
+            <SkusTab customerId={customerId} canManage={canManageSkus} canRunCalcs={canRunCalcs} />
           </TabsContent>
         </Tabs>
       </div>

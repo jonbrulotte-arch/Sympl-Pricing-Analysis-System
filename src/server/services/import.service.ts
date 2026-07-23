@@ -4,6 +4,7 @@ import { ForbiddenError } from "@/lib/errors";
 import { checkCustomerAccess } from "@/server/authorization/check-customer-access";
 import { Permission } from "@/server/authorization/permissions";
 import { logAction, AuditAction } from "./audit-log.service";
+import { enqueueRecalculateBatch } from "@/server/jobs/queue";
 
 interface ImportRowData {
   sku?: string;
@@ -314,7 +315,29 @@ export async function createImportBatch(
       }
     }
 
-    // Step 9: recalculation — no-op in Phase 2
+    // Step 9: enqueue recalculation for all successfully imported SKUs
+    const successfulSkuIds: string[] = [];
+    for (const { rowNumber } of rawRows) {
+      const importRow = await db.importRow.findFirst({ where: { batchId: batch.id, rowNumber } });
+      if (importRow?.status === "SUCCESS") {
+        // Find the CustomerSku that was upserted for this row
+        const rawData = importRow.rawData as { sku?: string };
+        if (rawData.sku) {
+          const product = await db.product.findFirst({ where: { sku: rawData.sku, deletedAt: null } });
+          if (product) {
+            const cSku = await db.customerSku.findFirst({ where: { customerId, productId: product.id, deletedAt: null } });
+            if (cSku) successfulSkuIds.push(cSku.id);
+          }
+        }
+      }
+    }
+    if (successfulSkuIds.length > 0) {
+      try {
+        await enqueueRecalculateBatch(successfulSkuIds, userId);
+      } catch {
+        // Non-fatal: worker may not be running in dev
+      }
+    }
 
     // Step 10: Report
     const errorSummaryEntries = Object.entries(errorSummaryMap).slice(0, 100);
