@@ -8,10 +8,13 @@ import type { CreateCustomerInput, UpdateCustomerInput } from "@/server/validati
 export async function listCustomers(userId: string, userPermissions: string[]) {
   const hasGlobalAccess = userPermissions.includes(Permission.GLOBAL_CUSTOMER_ACCESS);
 
+  const include = { paymentTerm: true };
+
   if (hasGlobalAccess) {
     return db.customer.findMany({
       where: { deletedAt: null },
       orderBy: { name: "asc" },
+      include,
     });
   }
 
@@ -19,6 +22,7 @@ export async function listCustomers(userId: string, userPermissions: string[]) {
   return db.customer.findMany({
     where: { id: { in: assignedIds }, deletedAt: null },
     orderBy: { name: "asc" },
+    include,
   });
 }
 
