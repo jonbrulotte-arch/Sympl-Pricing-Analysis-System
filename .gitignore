@@ -26,5 +26,13 @@ test-results/
 .DS_Store
 *.log
 .turbo/
+tsconfig.tsbuildinfo
 
+# Generated Prisma client
 /src/generated/prisma
+
+# IDE and tooling
+.agents/
+.claude/
+.windsurf/
+skills-lock.json
