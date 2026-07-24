@@ -36,6 +36,109 @@ enum ShippingTerms {
   COLLECT
 }
 
+enum AllocationType {
+  PERCENT_OF_SELLING_PRICE
+  PERCENT_OF_NET_REVENUE
+  PERCENT_OF_COST
+  FIXED_PER_UNIT
+  FIXED_PER_ORDER
+  FIXED_PER_SHIPMENT
+  FIXED_PER_SKU
+  CUSTOM
+}
+
+enum AlertStatus {
+  OK
+  WARNING
+  HIGH
+  CRITICAL
+}
+
+enum ReviewStatus {
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  ESCALATED
+}
+
+enum MarginMethod {
+  CONTRIBUTION_MARGIN
+  GROSS_MARGIN
+}
+
+enum ImportStatus {
+  PENDING
+  VALIDATING
+  PROCESSING
+  COMPLETE
+  FAILED
+}
+
+enum ImportRowStatus {
+  PENDING
+  SUCCESS
+  ERROR
+  SKIPPED
+}
+
+enum AlertSeverity {
+  CRITICAL
+  HIGH
+  WARNING
+  INFO
+}
+
+enum AlertType {
+  BELOW_CRITICAL_MARGIN
+  BELOW_MINIMUM_MARGIN
+  BELOW_WARNING_MARGIN
+  NEGATIVE_PROFIT
+  MISSING_SELLING_PRICE
+  MISSING_PRODUCT_COST
+  DIMENSION_FALLBACK_USED
+  NO_SHIPPING_QUOTE
+  EXPIRED_QUOTE
+  QUOTE_EXPIRING_SOON
+  COST_INCREASED
+  COST_DECREASED
+  PRICE_CHANGE
+  ALLOCATION_CHANGED
+  MARGIN_REQUIREMENT_CHANGED
+  PENDING_REVIEW
+  REVIEW_OVERDUE
+  ESCALATED
+}
+
+enum AlertLifecycleStatus {
+  OPEN
+  ACKNOWLEDGED
+  SUPPRESSED
+  RESOLVED
+}
+
+enum ShippingProvider {
+  UPS
+  USPS
+}
+
+enum DimensionSource {
+  SHIPPING
+  UPC
+  DUNNAGE_FALLBACK
+  NONE
+}
+
+enum NotificationType {
+  COMMENT_MENTION
+  COMMENT_REPLY
+  REVIEW_REQUESTED
+  REVIEW_APPROVED
+  REVIEW_ESCALATED
+  REVIEW_RESET
+  SKU_ASSIGNED
+  ALERT_TRIGGERED
+}
+
 // ────────────────────────────────────────
 // AUTHORIZATION
 // ────────────────────────────────────────
@@ -91,26 +194,53 @@ model UserPermission {
 // ────────────────────────────────────────
 
 model User {
-  id                 String    @id @default(uuid())
-  email              String    @unique
-  passwordHash       String
-  firstName          String
-  lastName           String
-  roleId             String
-  isActive           Boolean   @default(true)
-  lastLoginAt        DateTime?
-  failedLoginCount   Int       @default(0)
-  lockedUntil        DateTime?
-  mustResetPassword  Boolean   @default(false)
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
-  deletedAt          DateTime?
+  id                String    @id @default(uuid())
+  email             String    @unique
+  passwordHash      String
+  firstName         String
+  lastName          String
+  roleId            String
+  isActive          Boolean   @default(true)
+  lastLoginAt       DateTime?
+  failedLoginCount  Int       @default(0)
+  lockedUntil       DateTime?
+  mustResetPassword Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  deletedAt         DateTime?
 
-  role            Role             @relation(fields: [roleId], references: [id])
+  role            Role               @relation(fields: [roleId], references: [id])
   userPermissions UserPermission[]
   assignments     CustomerAssignment[] @relation("AssignedUser")
   assignedBy      CustomerAssignment[] @relation("AssignedBy")
   auditLogs       AuditLog[]
+  assignedSkus    CustomerSku[]       @relation("AssignedAnalyst")
+  costHistoryRecorded ProductCostHistory[]
+  priceHistoryRecorded CustomerPriceHistory[]
+  importBatches   ImportBatch[]
+  alertsAcknowledged AlertHistory[]
+  alertsAcknowledgedOn Alert[] @relation("AlertAcknowledgedBy")
+  alertsSuppressedOn   Alert[] @relation("AlertSuppressedBy")
+  alertsResolvedOn     Alert[] @relation("AlertResolvedBy")
+  savedViews           SavedView[]
+  comments             CustomerSkuComment[]
+  notifications        Notification[]
+}
+
+// ────────────────────────────────────────
+// PAYMENT TERMS
+// ────────────────────────────────────────
+
+model PaymentTerm {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  days        Int
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  customers Customer[]
 }
 
 // ────────────────────────────────────────
@@ -118,37 +248,442 @@ model User {
 // ────────────────────────────────────────
 
 model Customer {
-  id                          String         @id @default(uuid())
-  name                        String
-  code                        String         @unique
-  status                      CustomerStatus @default(ACTIVE)
-  description                 String?
-  currency                    String         @default("USD")
-  timezone                    String         @default("America/New_York")
-  shippingTerms               ShippingTerms  @default(PREPAID)
-  defaultOriginPostalCode     String?
+  id                           String         @id @default(uuid())
+  name                         String
+  code                         String         @unique
+  status                       CustomerStatus @default(ACTIVE)
+  description                  String?
+  currency                     String         @default("USD")
+  timezone                     String         @default("America/New_York")
+  shippingTerms                ShippingTerms  @default(PREPAID)
+  defaultOriginPostalCode      String?
   defaultDestinationPostalCode String?
-  isResidential               Boolean        @default(false)
-  createdAt                   DateTime       @default(now())
-  updatedAt                   DateTime       @updatedAt
-  deletedAt                   DateTime?
+  isResidential                Boolean        @default(false)
+  paymentTermId                String?
+  createdAt                    DateTime       @default(now())
+  updatedAt                    DateTime       @updatedAt
+  deletedAt                    DateTime?
 
-  assignments CustomerAssignment[]
+  paymentTerm       PaymentTerm?              @relation(fields: [paymentTermId], references: [id])
+  assignments       CustomerAssignment[]
+  contacts          CustomerContact[]
+  allocations       CustomerAllocation[]
+  marginRequirement CustomerMarginRequirement?
+  skus              CustomerSku[]
 }
 
 model CustomerAssignment {
-  id          String         @id @default(uuid())
-  userId      String
-  customerId  String
+  id           String         @id @default(uuid())
+  userId       String
+  customerId   String
   assignedById String
-  role        AssignmentRole @default(ANALYST)
-  createdAt   DateTime       @default(now())
+  role         AssignmentRole @default(ANALYST)
+  createdAt    DateTime       @default(now())
 
   user       User     @relation("AssignedUser", fields: [userId], references: [id])
   customer   Customer @relation(fields: [customerId], references: [id])
   assignedBy User     @relation("AssignedBy", fields: [assignedById], references: [id])
 
   @@unique([userId, customerId])
+}
+
+model CustomerContact {
+  id         String   @id @default(uuid())
+  customerId String
+  name       String
+  title      String?
+  email      String?
+  phone      String?
+  isPrimary  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id])
+}
+
+model CustomerAllocation {
+  id                 String         @id @default(uuid())
+  customerId         String
+  name               String
+  description        String?
+  calculationType    AllocationType
+  rate               Decimal?       @db.Decimal(10, 4)
+  amount             Decimal?       @db.Decimal(19, 4)
+  priority           Int            @default(0)
+  isActive           Boolean        @default(true)
+  isIncludedInMargin Boolean        @default(true)
+  effectiveDate      DateTime       @db.Date
+  expirationDate     DateTime?      @db.Date
+  notes              String?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId, isActive])
+}
+
+model CustomerMarginRequirement {
+  id                       String       @id @default(uuid())
+  customerId               String       @unique
+  minimumMarginPercent     Decimal      @db.Decimal(10, 4)
+  warningThresholdPercent  Decimal      @db.Decimal(10, 4)
+  criticalThresholdPercent Decimal      @db.Decimal(10, 4)
+  calculationMethod        MarginMethod @default(CONTRIBUTION_MARGIN)
+  notes                    String?
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id])
+}
+
+// ────────────────────────────────────────
+// PRODUCTS
+// ────────────────────────────────────────
+
+model ProductCategory {
+  id             String   @id @default(uuid())
+  name           String
+  parentId       String?
+  dunnagePercent Decimal  @default(0) @db.Decimal(10, 4)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  parent   ProductCategory?  @relation("CategoryParent", fields: [parentId], references: [id])
+  children ProductCategory[] @relation("CategoryParent")
+  products Product[]
+  dunnageConfigs DunnageConfig[]
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  sku         String   @unique
+  name        String
+  brand       String?
+  upc         String?
+  categoryId  String?
+  description String?
+  unitOfMeasure String?
+  isActive    Boolean  @default(true)
+
+  // UPC / retail unit dimensions (inches, lbs)
+  length  Decimal? @db.Decimal(10, 4)
+  width   Decimal? @db.Decimal(10, 4)
+  height  Decimal? @db.Decimal(10, 4)
+  weight  Decimal? @db.Decimal(10, 4)
+
+  // Shipping / case dimensions (used for carrier rate requests)
+  shippingLength Decimal? @db.Decimal(10, 4)
+  shippingWidth  Decimal? @db.Decimal(10, 4)
+  shippingHeight Decimal? @db.Decimal(10, 4)
+  shippingWeight Decimal? @db.Decimal(10, 4)
+
+  // Confidential cost fields — stripped by stripCostFields() for users without view_product_cost
+  currentCost              Decimal?  @db.Decimal(19, 4)
+  futureCost               Decimal?  @db.Decimal(19, 4)
+  costEffectiveDate        DateTime? @db.Date
+  futureCostEffectiveDate  DateTime? @db.Date
+  costSource               String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  category    ProductCategory?    @relation(fields: [categoryId], references: [id])
+  costHistory ProductCostHistory[]
+  customerSkus CustomerSku[]
+}
+
+// Append-only — no updatedAt, no deletedAt
+model ProductCostHistory {
+  id            String   @id @default(uuid())
+  productId     String
+  cost          Decimal  @db.Decimal(19, 4)
+  effectiveDate DateTime @db.Date
+  source        String?
+  recordedById  String
+  createdAt     DateTime @default(now())
+
+  product    Product @relation(fields: [productId], references: [id])
+  recordedBy User    @relation(fields: [recordedById], references: [id])
+
+  @@index([productId, createdAt])
+}
+
+// ────────────────────────────────────────
+// CUSTOMER-SKU (central analysis entity)
+// ────────────────────────────────────────
+
+model CustomerSku {
+  id                    String        @id @default(uuid())
+  customerId            String
+  productId             String
+  customerSkuCode       String?
+  sellingPrice          Decimal?      @db.Decimal(19, 4)
+  packageQuantity       Int           @default(1)
+  minimumMarginOverride Decimal?      @db.Decimal(10, 4)
+  shippingTermsOverride ShippingTerms?
+  useShippingDimensions Boolean       @default(false)
+  alertStatus           AlertStatus   @default(OK)
+  reviewStatus          ReviewStatus  @default(PENDING)
+  assignedAnalystId     String?
+  lastCalculatedAt      DateTime?
+  lastQuotedAt          DateTime?
+  notes                 String?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  deletedAt             DateTime?
+
+  customer       Customer               @relation(fields: [customerId], references: [id])
+  product        Product                @relation(fields: [productId], references: [id])
+  assignedAnalyst User?                 @relation("AssignedAnalyst", fields: [assignedAnalystId], references: [id])
+  priceHistory   CustomerPriceHistory[]
+  calculationResults CalculationResult[]
+  alerts         Alert[]
+  shippingQuotes ShippingQuote[]
+  comments       CustomerSkuComment[]
+
+  @@unique([customerId, productId])
+  @@index([customerId, alertStatus])
+}
+
+// Append-only
+model CustomerPriceHistory {
+  id            String   @id @default(uuid())
+  customerSkuId String
+  sellingPrice  Decimal  @db.Decimal(19, 4)
+  effectiveDate DateTime @db.Date
+  recordedById  String
+  createdAt     DateTime @default(now())
+
+  customerSku CustomerSku @relation(fields: [customerSkuId], references: [id])
+  recordedBy  User        @relation(fields: [recordedById], references: [id])
+
+  @@index([customerSkuId, createdAt])
+}
+
+// ────────────────────────────────────────
+// IMPORTS
+// ────────────────────────────────────────
+
+model ImportBatch {
+  id           String       @id @default(uuid())
+  uploadedById String
+  customerId   String?
+  filename     String
+  status       ImportStatus @default(PENDING)
+  totalRows    Int          @default(0)
+  successRows  Int          @default(0)
+  errorRows    Int          @default(0)
+  skippedRows  Int          @default(0)
+  errorSummary Json?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  uploadedBy User         @relation(fields: [uploadedById], references: [id])
+  rows       ImportRow[]
+
+  @@index([uploadedById, createdAt])
+}
+
+model ImportRow {
+  id        String          @id @default(uuid())
+  batchId   String
+  rowNumber Int
+  rawData   Json
+  status    ImportRowStatus @default(PENDING)
+  errors    Json?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  batch ImportBatch @relation(fields: [batchId], references: [id])
+
+  @@index([batchId, status])
+}
+
+// ────────────────────────────────────────
+// CALCULATION RESULTS (append-only)
+// ────────────────────────────────────────
+
+model CalculationResult {
+  id                       String      @id @default(uuid())
+  customerSkuId            String
+  contributionMarginPercent Decimal    @db.Decimal(10, 4)
+  contributionProfit       Decimal     @db.Decimal(19, 4)
+  netRevenue               Decimal     @db.Decimal(19, 4)
+  totalVariableCost        Decimal     @db.Decimal(19, 4)
+  alertStatus              AlertStatus
+  calculationTrace         Json
+  calculatedAt             DateTime    @default(now())
+  initiatedBy              String?
+
+  customerSku CustomerSku @relation(fields: [customerSkuId], references: [id])
+
+  @@index([customerSkuId, calculatedAt])
+}
+
+// ────────────────────────────────────────
+// ALERTS
+// ────────────────────────────────────────
+
+model Alert {
+  id            String               @id @default(uuid())
+  customerSkuId String
+  alertType     AlertType
+  severity      AlertSeverity
+  status        AlertLifecycleStatus @default(OPEN)
+  message       String?
+  triggeredAt   DateTime             @default(now())
+  acknowledgedAt DateTime?
+  acknowledgedById String?
+  suppressedAt  DateTime?
+  suppressedById String?
+  suppressedReason String?
+  resolvedAt    DateTime?
+  resolvedById  String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  customerSku    CustomerSku    @relation(fields: [customerSkuId], references: [id])
+  acknowledgedBy User?          @relation("AlertAcknowledgedBy", fields: [acknowledgedById], references: [id])
+  suppressedBy   User?          @relation("AlertSuppressedBy", fields: [suppressedById], references: [id])
+  resolvedBy     User?          @relation("AlertResolvedBy", fields: [resolvedById], references: [id])
+  history        AlertHistory[]
+
+  @@index([customerSkuId, status])
+  @@index([customerSkuId, alertType, status])
+}
+
+model AlertHistory {
+  id          String               @id @default(uuid())
+  alertId     String
+  fromStatus  AlertLifecycleStatus?
+  toStatus    AlertLifecycleStatus
+  changedById String?
+  note        String?
+  createdAt   DateTime             @default(now())
+
+  alert     Alert  @relation(fields: [alertId], references: [id])
+  changedBy User?  @relation(fields: [changedById], references: [id])
+
+  @@index([alertId, createdAt])
+}
+
+// ────────────────────────────────────────
+// SYSTEM CONFIG (encrypted credential storage)
+// ────────────────────────────────────────
+
+model SystemConfig {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  isEncrypted Boolean  @default(false)
+  description String?
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ────────────────────────────────────────
+// SHIPPING
+// ────────────────────────────────────────
+
+model ShippingQuote {
+  id                String           @id @default(uuid())
+  customerSkuId     String
+  carrier           ShippingProvider
+  serviceCode       String
+  rateAmount        Decimal          @db.Decimal(19, 4)
+  currency          String           @default("USD")
+  billedWeight      Decimal          @db.Decimal(10, 4)
+  dimensionalWeight Decimal          @db.Decimal(10, 4)
+  divisorUsed       Decimal          @db.Decimal(10, 4)
+  dimensionSource   DimensionSource
+  quoteExpiresAt    DateTime
+  isSelected        Boolean          @default(false)
+  rawResponse       Json?
+  createdAt         DateTime         @default(now())
+
+  customerSku CustomerSku @relation(fields: [customerSkuId], references: [id])
+
+  @@index([customerSkuId, isSelected])
+  @@index([customerSkuId, quoteExpiresAt])
+}
+
+model DunnageConfig {
+  id             String   @id @default(uuid())
+  categoryId     String?  @unique
+  dunnagePercent Decimal  @db.Decimal(10, 4)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  category ProductCategory? @relation(fields: [categoryId], references: [id])
+}
+
+// ────────────────────────────────────────
+// SAVED VIEWS (per-user ROI grid presets)
+// ────────────────────────────────────────
+
+model SavedView {
+  id        String   @id @default(uuid())
+  userId    String
+  name      String
+  isDefault Boolean  @default(false)
+  config    Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+// ────────────────────────────────────────
+// COMMENTS
+// ────────────────────────────────────────
+
+model CustomerSkuComment {
+  id              String    @id @default(uuid())
+  customerSkuId   String
+  authorId        String
+  body            String
+  parentCommentId String?
+  isEdited        Boolean   @default(false)
+  editedAt        DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  customerSku   CustomerSku          @relation(fields: [customerSkuId], references: [id])
+  author        User                 @relation(fields: [authorId], references: [id])
+  parentComment CustomerSkuComment?  @relation("CommentReplies", fields: [parentCommentId], references: [id])
+  replies       CustomerSkuComment[] @relation("CommentReplies")
+
+  @@index([customerSkuId, createdAt])
+  @@index([parentCommentId])
+}
+
+// ────────────────────────────────────────
+// NOTIFICATIONS
+// ────────────────────────────────────────
+
+model Notification {
+  id         String           @id @default(uuid())
+  userId     String
+  type       NotificationType
+  title      String
+  body       String?
+  entityType String?
+  entityId   String?
+  isRead     Boolean          @default(false)
+  readAt     DateTime?
+  createdAt  DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, isRead, createdAt])
 }
 
 // ────────────────────────────────────────

@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { stripCostFields, canViewProductCost } from "@/server/authorization/check-cost-visibility";
+import {
+  stripCostFields,
+  canViewProductCost,
+  stripShippingCostFields,
+  canViewShippingCost,
+} from "@/server/authorization/check-cost-visibility";
 import { Permission } from "@/server/authorization/permissions";
 
 const fullProduct = {
@@ -51,5 +56,56 @@ describe("canViewProductCost", () => {
   it("returns false when view_product_cost is absent", () => {
     expect(canViewProductCost([Permission.VIEW_CUSTOMERS])).toBe(false);
     expect(canViewProductCost([])).toBe(false);
+  });
+});
+
+const fullShippingData = {
+  id: "q1",
+  carrier: "UPS",
+  serviceCode: "GROUND",
+  shippingCost: 5.25,
+  shippingQuotes: [{ id: "q1" }],
+  rateAmount: 5.25,
+  billedWeight: 10.0,
+  dimensionalWeight: 8.5,
+  rawResponse: { data: "test" },
+  quoteExpiresAt: new Date(),
+};
+
+describe("stripShippingCostFields", () => {
+  it("returns full data when user has view_shipping_cost", () => {
+    const result = stripShippingCostFields(fullShippingData, [Permission.VIEW_SHIPPING_COST]);
+    expect(result).toHaveProperty("shippingCost");
+    expect(result).toHaveProperty("rateAmount");
+    expect(result).toHaveProperty("billedWeight");
+    expect(result).toHaveProperty("rawResponse");
+  });
+
+  it("strips shipping cost fields when user lacks view_shipping_cost", () => {
+    const result = stripShippingCostFields(fullShippingData, [Permission.VIEW_CUSTOMERS]);
+    expect(result).not.toHaveProperty("shippingCost");
+    expect(result).not.toHaveProperty("shippingQuotes");
+    expect(result).not.toHaveProperty("rateAmount");
+    expect(result).not.toHaveProperty("billedWeight");
+    expect(result).not.toHaveProperty("dimensionalWeight");
+    expect(result).not.toHaveProperty("rawResponse");
+  });
+
+  it("preserves non-shipping fields when stripping", () => {
+    const result = stripShippingCostFields(fullShippingData, []);
+    expect(result).toHaveProperty("id", "q1");
+    expect(result).toHaveProperty("carrier", "UPS");
+    expect(result).toHaveProperty("quoteExpiresAt");
+  });
+});
+
+describe("canViewShippingCost", () => {
+  it("returns true when view_shipping_cost is present", () => {
+    expect(canViewShippingCost([Permission.VIEW_SHIPPING_COST])).toBe(true);
+  });
+
+  it("returns false when view_shipping_cost is absent", () => {
+    expect(canViewShippingCost([Permission.VIEW_CUSTOMERS])).toBe(false);
+    expect(canViewShippingCost([])).toBe(false);
   });
 });
