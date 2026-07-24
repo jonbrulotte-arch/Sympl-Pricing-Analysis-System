@@ -17,6 +17,22 @@ interface ImportRowData {
   futureCost?: number | null;
 }
 
+export function validateImportRow(data: ImportRowData): string[] {
+  const errors: string[] = [];
+  if (!data.sku) errors.push("SKU is required");
+  if (data.sellingPrice != null && data.sellingPrice <= 0)
+    errors.push("Selling Price must be a positive number");
+  if (data.packageQuantity != null && (!Number.isInteger(data.packageQuantity) || data.packageQuantity < 1))
+    errors.push("Package Quantity must be a positive integer");
+  if (data.minimumMarginOverride != null && (data.minimumMarginOverride < 0 || data.minimumMarginOverride > 100))
+    errors.push("Minimum Margin Override must be between 0 and 100");
+  if (data.currentCost != null && data.currentCost < 0)
+    errors.push("Current Cost must be a non-negative number");
+  if (data.futureCost != null && data.futureCost < 0)
+    errors.push("Future Cost must be a non-negative number");
+  return errors;
+}
+
 function parseRow(row: ExcelJS.Row, headers: Record<string, number>): ImportRowData {
   const get = (name: string) => {
     const col = headers[name.toLowerCase()];
@@ -392,5 +408,19 @@ export async function listImportBatches(userId: string) {
     where: { uploadedById: userId },
     orderBy: { createdAt: "desc" },
     take: 50,
+  });
+}
+
+export async function cancelImportBatch(batchId: string, userId: string) {
+  const batch = await db.importBatch.findUnique({ where: { id: batchId } });
+  if (!batch || batch.uploadedById !== userId) {
+    throw new Error("Import batch not found");
+  }
+  if (!["PENDING", "VALIDATING"].includes(batch.status)) {
+    throw new Error(`Cannot cancel a batch in '${batch.status}' status`);
+  }
+  return db.importBatch.update({
+    where: { id: batchId },
+    data: { status: "FAILED", errorSummary: { cancelled: true } },
   });
 }
