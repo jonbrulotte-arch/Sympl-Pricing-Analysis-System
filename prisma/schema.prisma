@@ -116,6 +116,18 @@ enum AlertLifecycleStatus {
   RESOLVED
 }
 
+enum ShippingProvider {
+  UPS
+  USPS
+}
+
+enum DimensionSource {
+  SHIPPING
+  UPC
+  DUNNAGE_FALLBACK
+  NONE
+}
+
 // ────────────────────────────────────────
 // AUTHORIZATION
 // ────────────────────────────────────────
@@ -326,6 +338,7 @@ model ProductCategory {
   parent   ProductCategory?  @relation("CategoryParent", fields: [parentId], references: [id])
   children ProductCategory[] @relation("CategoryParent")
   products Product[]
+  dunnageConfigs DunnageConfig[]
 }
 
 model Product {
@@ -413,6 +426,7 @@ model CustomerSku {
   priceHistory   CustomerPriceHistory[]
   calculationResults CalculationResult[]
   alerts         Alert[]
+  shippingQuotes ShippingQuote[]
 
   @@unique([customerId, productId])
   @@index([customerId, alertStatus])
@@ -538,6 +552,58 @@ model AlertHistory {
   changedBy User?  @relation(fields: [changedById], references: [id])
 
   @@index([alertId, createdAt])
+}
+
+// ────────────────────────────────────────
+// SYSTEM CONFIG (encrypted credential storage)
+// ────────────────────────────────────────
+
+model SystemConfig {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  isEncrypted Boolean  @default(false)
+  description String?
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ────────────────────────────────────────
+// SHIPPING
+// ────────────────────────────────────────
+
+model ShippingQuote {
+  id                String           @id @default(uuid())
+  customerSkuId     String
+  carrier           ShippingProvider
+  serviceCode       String
+  rateAmount        Decimal          @db.Decimal(19, 4)
+  currency          String           @default("USD")
+  billedWeight      Decimal          @db.Decimal(10, 4)
+  dimensionalWeight Decimal          @db.Decimal(10, 4)
+  divisorUsed       Decimal          @db.Decimal(10, 4)
+  dimensionSource   DimensionSource
+  quoteExpiresAt    DateTime
+  isSelected        Boolean          @default(false)
+  rawResponse       Json?
+  createdAt         DateTime         @default(now())
+
+  customerSku CustomerSku @relation(fields: [customerSkuId], references: [id])
+
+  @@index([customerSkuId, isSelected])
+  @@index([customerSkuId, quoteExpiresAt])
+}
+
+model DunnageConfig {
+  id             String   @id @default(uuid())
+  categoryId     String?  @unique
+  dunnagePercent Decimal  @db.Decimal(10, 4)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  category ProductCategory? @relation(fields: [categoryId], references: [id])
 }
 
 // ────────────────────────────────────────

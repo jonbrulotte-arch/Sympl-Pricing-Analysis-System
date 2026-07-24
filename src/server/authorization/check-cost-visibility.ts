@@ -33,3 +33,31 @@ export function stripCostFields<T extends Record<string, unknown>>(
 export function canViewProductCost(userPermissions: string[]): boolean {
   return userPermissions.includes(Permission.VIEW_PRODUCT_COST);
 }
+
+const SHIPPING_COST_FIELDS = [
+  "shippingCost",
+  "shippingQuotes",
+  "rateAmount",
+  "billedWeight",
+  "dimensionalWeight",
+  "rawResponse",
+] as const;
+
+export function stripShippingCostFields<T extends Record<string, unknown>>(
+  data: T,
+  userPermissions: string[]
+): Omit<T, (typeof SHIPPING_COST_FIELDS)[number]> {
+  if (userPermissions.includes(Permission.VIEW_SHIPPING_COST)) {
+    return data;
+  }
+
+  const sanitized = { ...data };
+  for (const field of SHIPPING_COST_FIELDS) {
+    delete sanitized[field as keyof typeof sanitized];
+  }
+  return sanitized as Omit<T, (typeof SHIPPING_COST_FIELDS)[number]>;
+}
+
+export function canViewShippingCost(userPermissions: string[]): boolean {
+  return userPermissions.includes(Permission.VIEW_SHIPPING_COST);
+}

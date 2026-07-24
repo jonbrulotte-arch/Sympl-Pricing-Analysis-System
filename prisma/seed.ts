@@ -529,6 +529,75 @@ async function main() {
 
   void gamma;
 
+  // ── Dunnage Configs ──────────────────────────────────────────────
+  const existingGlobalDunnage = await db.dunnageConfig.findFirst({ where: { categoryId: null } });
+  if (!existingGlobalDunnage) {
+    await db.dunnageConfig.create({
+      data: { categoryId: null, dunnagePercent: 10, isActive: true },
+    });
+  }
+
+  const existingBevDunnage = await db.dunnageConfig.findFirst({ where: { categoryId: beverages.id } });
+  if (!existingBevDunnage) {
+    await db.dunnageConfig.create({
+      data: { categoryId: beverages.id, dunnagePercent: 5, isActive: true },
+    });
+  }
+
+  // ── System Config (shipping defaults) ────────────────────────────
+  const shippingConfigs = [
+    { key: "shipping.quoteTtlDays", value: "7", description: "Shipping quote cache TTL in days" },
+    { key: "ups.divisor", value: "139", description: "UPS dimensional weight divisor" },
+    { key: "usps.divisor", value: "166", description: "USPS dimensional weight divisor" },
+  ];
+
+  for (const cfg of shippingConfigs) {
+    const existing = await db.systemConfig.findUnique({ where: { key: cfg.key } });
+    if (!existing) {
+      await db.systemConfig.create({
+        data: {
+          key: cfg.key,
+          value: cfg.value,
+          isEncrypted: false,
+          description: cfg.description,
+          updatedById: adminId,
+        },
+      });
+    }
+  }
+
+  // ── Sample Shipping Quotes (for Acme SKUs) ──────────────────────
+  const acmeCustomerSkus = await db.customerSku.findMany({
+    where: { customerId: acme.id, deletedAt: null },
+  });
+
+  for (const sku of acmeCustomerSkus) {
+    const existingQuote = await db.shippingQuote.findFirst({
+      where: { customerSkuId: sku.id },
+    });
+    if (!existingQuote) {
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7);
+
+      await db.shippingQuote.create({
+        data: {
+          customerSkuId: sku.id,
+          carrier: "UPS",
+          serviceCode: "MOCK_GROUND",
+          rateAmount: 3.25 + Math.random() * 2,
+          currency: "USD",
+          billedWeight: 10.0,
+          dimensionalWeight: 8.5,
+          divisorUsed: 139,
+          dimensionSource: "SHIPPING",
+          quoteExpiresAt: expiresAt,
+          isSelected: true,
+          rawResponse: { provider: "mock", seeded: true },
+        },
+      });
+    }
+  }
+
   console.log("Seed complete.");
   console.log(`  Roles:              ${roleNames.length}`);
   console.log(`  Permissions:        ${permissionDefs.length}`);
@@ -538,6 +607,9 @@ async function main() {
   console.log(`  Product Categories: 3 (Beverages > Carbonated, Non-Carbonated)`);
   console.log(`  Products:           5`);
   console.log(`  Customer SKUs:      4 (Acme) + 3 (Beta)`);
+  console.log(`  Dunnage Configs:    2 (Global + Beverages)`);
+  console.log(`  System Configs:     ${shippingConfigs.length} (shipping defaults)`);
+  console.log(`  Shipping Quotes:    ${acmeCustomerSkus.length} (mock quotes for Acme)`);
   console.log();
   console.log("Test accounts (password: Admin1234!):");
   for (const u of users) {

@@ -23,3 +23,7 @@ export async function enqueueRecalculateSku(customerSkuId: string, initiatedBy: 
 export async function enqueueRecalculateBatch(customerSkuIds: string[], initiatedBy: string) {
   await boss.send("recalculate-batch", { customerSkuIds, initiatedBy });
 }
+
+export async function enqueueShippingQuoteRefresh(customerSkuIds: string[], initiatedBy: string) {
+  await boss.send("shipping-quote-refresh", { customerSkuIds, initiatedBy });
+}

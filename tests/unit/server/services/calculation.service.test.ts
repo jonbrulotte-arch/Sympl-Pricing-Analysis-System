@@ -36,9 +36,22 @@ vi.mock("@/server/services/alert.service", () => ({
   autoResolveMarginAlerts: vi.fn(),
 }));
 
+vi.mock("@/server/services/shipping/shipping.service", () => ({
+  getSelectedQuote: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock("@/server/services/shipping/dunnage.service", () => ({
+  getDunnagePercent: vi.fn().mockResolvedValue(0),
+}));
+
 import { db } from "@/lib/db";
 import { calculateCustomerSku } from "@/server/services/calculation.service";
 import { createOrUpdateAlert, autoResolveMarginAlerts } from "@/server/services/alert.service";
+import { getSelectedQuote } from "@/server/services/shipping/shipping.service";
+import { getDunnagePercent } from "@/server/services/shipping/dunnage.service";
+
+const mockGetSelectedQuote = getSelectedQuote as ReturnType<typeof vi.fn>;
+const mockGetDunnagePercent = getDunnagePercent as ReturnType<typeof vi.fn>;
 
 const mockDb = db as unknown as {
   customerSku: { findUnique: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> };
@@ -290,10 +303,63 @@ describe("calculateCustomerSku", () => {
 
   it("includes calculationTrace with engine version and all sections", async () => {
     const result = await calculateCustomerSku("sku-1", "user-1");
-    expect(result.trace.engineVersion).toBe("1.0.0");
+    expect(result.trace.engineVersion).toBe("1.1.0");
     expect(result.trace.inputs).toBeDefined();
     expect(result.trace.intermediates).toBeDefined();
     expect(result.trace.outputs).toBeDefined();
     expect(result.trace.dataQuality).toBeDefined();
+  });
+
+  it("includes shippingQuoteId in trace inputs", async () => {
+    const result = await calculateCustomerSku("sku-1", "user-1");
+    expect(result.trace.inputs.shippingQuoteId).toBeNull();
+  });
+
+  it("uses shipping cost from selected quote for PREPAID customer", async () => {
+    mockGetSelectedQuote.mockResolvedValue({
+      id: "quote-1",
+      rateAmount: 3.50,
+      dimensionSource: "SHIPPING",
+      dunnageApplied: false,
+    });
+
+    const result = await calculateCustomerSku("sku-1", "user-1");
+    // PREPAID: shipping cost is added to variable cost
+    // Total variable cost = 4.00 (product) + 3.50 (shipping) = 7.50
+    expect(result.totalVariableCost).toBeCloseTo(7.5);
+    expect(result.trace.inputs.shippingQuoteId).toBe("quote-1");
+    expect(result.trace.dataQuality.dimensionSource).toBe("SHIPPING");
+  });
+
+  it("does not add shipping cost for COLLECT customer", async () => {
+    mockGetSelectedQuote.mockResolvedValue({
+      id: "quote-2",
+      rateAmount: 3.50,
+      dimensionSource: "UPC",
+      dunnageApplied: false,
+    });
+
+    mockDb.customerSku.findUnique.mockResolvedValue({
+      ...baseSku,
+      customer: {
+        ...baseSku.customer,
+        shippingTerms: "COLLECT",
+      },
+    });
+
+    const result = await calculateCustomerSku("sku-1", "user-1");
+    // COLLECT: shipping cost is NOT added to variable cost
+    expect(result.totalVariableCost).toBeCloseTo(4.0);
+  });
+
+  it("calculates correctly with no quote and no dimensions (NONE source)", async () => {
+    mockGetSelectedQuote.mockResolvedValue(null);
+    mockGetDunnagePercent.mockResolvedValue(0);
+
+    const result = await calculateCustomerSku("sku-1", "user-1");
+    expect(result.trace.dataQuality.dimensionSource).toBe("NONE");
+    expect(result.trace.dataQuality.dunnageApplied).toBe(false);
+    // No shipping cost added
+    expect(result.totalVariableCost).toBeCloseTo(4.0);
   });
 });

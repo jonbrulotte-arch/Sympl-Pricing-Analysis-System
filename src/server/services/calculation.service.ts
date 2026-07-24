@@ -2,9 +2,12 @@ import { db } from "@/lib/db";
 import { NotFoundError } from "@/lib/errors";
 import { logAction, AuditAction } from "./audit-log.service";
 import { createOrUpdateAlert, autoResolveMarginAlerts } from "./alert.service";
+import { getSelectedQuote } from "./shipping/shipping.service";
+import { getDunnagePercent } from "./shipping/dunnage.service";
+import { resolveDimensions } from "./shipping/dimension-resolver";
 import type { AlertType, AlertSeverity } from "@/generated/prisma/client";
 
-export const ENGINE_VERSION = "1.0.0";
+export const ENGINE_VERSION = "1.1.0";
 
 interface AllocationInput {
   name: string;
@@ -22,6 +25,7 @@ interface CalculationTrace {
     sellingPrice: string | null;
     productCost: string | null;
     shippingCost: string;
+    shippingQuoteId: string | null;
     allocations: AllocationInput[];
     shippingTerms: string;
     packageQuantity: number;
@@ -102,8 +106,36 @@ export async function calculateCustomerSku(
   // Shipping terms: SKU override wins over customer default
   const effectiveShippingTerms = sku.shippingTermsOverride ?? sku.customer.shippingTerms;
 
-  // For Phase 3 shipping cost is 0 (no ShippingQuote model yet)
-  const shippingCost = 0;
+  // Resolve shipping cost from cached quote
+  let shippingCost = 0;
+  let shippingQuoteId: string | null = null;
+  let dimensionSource: string = "NONE";
+  let dunnageApplied = false;
+
+  const selectedQuote = await getSelectedQuote(customerSkuId);
+  if (selectedQuote) {
+    shippingCost = selectedQuote.rateAmount;
+    shippingQuoteId = selectedQuote.id;
+    dimensionSource = selectedQuote.dimensionSource;
+    dunnageApplied = selectedQuote.dunnageApplied;
+  } else {
+    const categoryDunnagePercent = sku.product.categoryId
+      ? await getDunnagePercent(sku.product.categoryId)
+      : await getDunnagePercent(null);
+    const productDims = {
+      length: sku.product.length ? Number(sku.product.length) : null,
+      width: sku.product.width ? Number(sku.product.width) : null,
+      height: sku.product.height ? Number(sku.product.height) : null,
+      weight: sku.product.weight ? Number(sku.product.weight) : null,
+      shippingLength: sku.product.shippingLength ? Number(sku.product.shippingLength) : null,
+      shippingWidth: sku.product.shippingWidth ? Number(sku.product.shippingWidth) : null,
+      shippingHeight: sku.product.shippingHeight ? Number(sku.product.shippingHeight) : null,
+      shippingWeight: sku.product.shippingWeight ? Number(sku.product.shippingWeight) : null,
+    };
+    const resolved = resolveDimensions(productDims, sku.useShippingDimensions, categoryDunnagePercent);
+    dimensionSource = resolved.source;
+    dunnageApplied = resolved.dunnageApplied;
+  }
 
   // Filter expired allocations
   const activeAllocations = sku.customer.allocations.filter((a) => {
@@ -265,6 +297,7 @@ export async function calculateCustomerSku(
       sellingPrice: sellingPrice?.toFixed(4) ?? null,
       productCost: productCost?.toFixed(4) ?? null,
       shippingCost: shippingCost.toFixed(4),
+      shippingQuoteId,
       allocations: allocationInputs,
       shippingTerms: effectiveShippingTerms,
       packageQuantity: packageQty,
@@ -285,8 +318,8 @@ export async function calculateCustomerSku(
     dataQuality: {
       missingSellingPrice,
       missingProductCost,
-      dimensionSource: "NONE",
-      dunnageApplied: false,
+      dimensionSource,
+      dunnageApplied,
     },
   };
 
@@ -352,11 +385,22 @@ async function processAlerts(
 ): Promise<void> {
   if (result.alertStatus === "OK") {
     await autoResolveMarginAlerts(customerSkuId);
-    return;
   }
 
   const { trace } = result;
   const dataQuality = trace.dataQuality;
+
+  // Shipping data quality alerts (fire regardless of OK status)
+  if (trace.inputs.shippingTerms === "PREPAID" && dataQuality.dimensionSource === "NONE") {
+    await createOrUpdateAlert(customerSkuId, "NO_SHIPPING_QUOTE", "WARNING",
+      "PREPAID shipping terms but no dimensions available for quoting");
+  }
+  if (dataQuality.dunnageApplied) {
+    await createOrUpdateAlert(customerSkuId, "DIMENSION_FALLBACK_USED", "INFO",
+      "Shipping quote used dunnage-estimated dimensions");
+  }
+
+  if (result.alertStatus === "OK") return;
 
   // Data quality alerts
   if (dataQuality.missingSellingPrice) {
