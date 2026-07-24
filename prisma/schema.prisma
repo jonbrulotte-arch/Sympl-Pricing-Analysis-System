@@ -128,6 +128,17 @@ enum DimensionSource {
   NONE
 }
 
+enum NotificationType {
+  COMMENT_MENTION
+  COMMENT_REPLY
+  REVIEW_REQUESTED
+  REVIEW_APPROVED
+  REVIEW_ESCALATED
+  REVIEW_RESET
+  SKU_ASSIGNED
+  ALERT_TRIGGERED
+}
+
 // ────────────────────────────────────────
 // AUTHORIZATION
 // ────────────────────────────────────────
@@ -212,6 +223,8 @@ model User {
   alertsSuppressedOn   Alert[] @relation("AlertSuppressedBy")
   alertsResolvedOn     Alert[] @relation("AlertResolvedBy")
   savedViews           SavedView[]
+  comments             CustomerSkuComment[]
+  notifications        Notification[]
 }
 
 // ────────────────────────────────────────
@@ -428,6 +441,7 @@ model CustomerSku {
   calculationResults CalculationResult[]
   alerts         Alert[]
   shippingQuotes ShippingQuote[]
+  comments       CustomerSkuComment[]
 
   @@unique([customerId, productId])
   @@index([customerId, alertStatus])
@@ -624,6 +638,52 @@ model SavedView {
 
   @@unique([userId, name])
   @@index([userId])
+}
+
+// ────────────────────────────────────────
+// COMMENTS
+// ────────────────────────────────────────
+
+model CustomerSkuComment {
+  id              String    @id @default(uuid())
+  customerSkuId   String
+  authorId        String
+  body            String
+  parentCommentId String?
+  isEdited        Boolean   @default(false)
+  editedAt        DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  customerSku   CustomerSku          @relation(fields: [customerSkuId], references: [id])
+  author        User                 @relation(fields: [authorId], references: [id])
+  parentComment CustomerSkuComment?  @relation("CommentReplies", fields: [parentCommentId], references: [id])
+  replies       CustomerSkuComment[] @relation("CommentReplies")
+
+  @@index([customerSkuId, createdAt])
+  @@index([parentCommentId])
+}
+
+// ────────────────────────────────────────
+// NOTIFICATIONS
+// ────────────────────────────────────────
+
+model Notification {
+  id         String           @id @default(uuid())
+  userId     String
+  type       NotificationType
+  title      String
+  body       String?
+  entityType String?
+  entityId   String?
+  isRead     Boolean          @default(false)
+  readAt     DateTime?
+  createdAt  DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, isRead, createdAt])
 }
 
 // ────────────────────────────────────────

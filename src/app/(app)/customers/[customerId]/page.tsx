@@ -701,6 +701,237 @@ function CalculationPanel({ calc }: { calc: NonNullable<CalculationResult> }) {
   );
 }
 
+// ─── Comments Tab ─────────────────────────────────────────────────────────────
+
+type CommentAuthor = { id: string; firstName: string; lastName: string };
+type Comment = {
+  id: string;
+  body: string;
+  isEdited: boolean;
+  createdAt: string;
+  author: CommentAuthor;
+  replies: (Omit<Comment, "replies">)[];
+};
+
+function CommentsTab({
+  customerId,
+  permissions,
+}: {
+  customerId: string;
+  permissions: string[];
+}) {
+  const [skuId, setSkuId] = React.useState<string | null>(null);
+  const [skus, setSkus] = React.useState<CustomerSku[]>([]);
+  const [comments, setComments] = React.useState<Comment[]>([]);
+  const [loadingComments, setLoadingComments] = React.useState(false);
+  const [newBody, setNewBody] = React.useState("");
+  const [replyTo, setReplyTo] = React.useState<string | null>(null);
+  const [replyBody, setReplyBody] = React.useState("");
+  const [submitting, setSubmitting] = React.useState(false);
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [editBody, setEditBody] = React.useState("");
+
+  const canAdd = permissions.includes("add_comments");
+  const canManageC = permissions.includes("manage_comments");
+
+  React.useEffect(() => {
+    fetch(`/api/customers/${customerId}/skus`)
+      .then((r) => r.json())
+      .then((d) => setSkus(d.data ?? []));
+  }, [customerId]);
+
+  async function loadComments(sid: string) {
+    setLoadingComments(true);
+    const res = await fetch(`/api/customers/${customerId}/skus/${sid}/comments`);
+    const d = await res.json();
+    setComments(d.data ?? []);
+    setLoadingComments(false);
+  }
+
+  function selectSku(sid: string) {
+    setSkuId(sid);
+    setReplyTo(null);
+    setReplyBody("");
+    setNewBody("");
+    loadComments(sid);
+  }
+
+  async function handlePost(body: string, parentCommentId?: string) {
+    if (!skuId || !body.trim()) return;
+    setSubmitting(true);
+    try {
+      await fetch(`/api/customers/${customerId}/skus/${skuId}/comments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body: body.trim(), ...(parentCommentId ? { parentCommentId } : {}) }),
+      });
+      setNewBody("");
+      setReplyTo(null);
+      setReplyBody("");
+      await loadComments(skuId);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleEdit(commentId: string, body: string) {
+    if (!skuId || !body.trim()) return;
+    setSubmitting(true);
+    try {
+      await fetch(`/api/customers/${customerId}/skus/${skuId}/comments/${commentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body: body.trim() }),
+      });
+      setEditingId(null);
+      setEditBody("");
+      await loadComments(skuId);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDelete(commentId: string) {
+    if (!skuId) return;
+    await fetch(`/api/customers/${customerId}/skus/${skuId}/comments/${commentId}`, {
+      method: "DELETE",
+    });
+    await loadComments(skuId);
+  }
+
+  const selectedSku = skus.find((s) => s.id === skuId);
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-1.5">
+        <Label>Select SKU</Label>
+        <Select value={skuId ?? ""} onValueChange={selectSku}>
+          <SelectTrigger className="w-72"><SelectValue placeholder="Choose a SKU to view comments…" /></SelectTrigger>
+          <SelectContent>
+            {skus.map((s) => (
+              <SelectItem key={s.id} value={s.id}>{s.product.sku} — {s.product.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {skuId && (
+        <Card>
+          <CardContent className="pt-4 space-y-4">
+            <p className="text-xs text-gray-500 font-semibold uppercase">
+              Comments for {selectedSku?.product.sku}
+            </p>
+
+            {loadingComments ? (
+              <Skeleton className="h-24 w-full" />
+            ) : comments.length === 0 ? (
+              <p className="text-sm text-gray-400 py-4 text-center">No comments yet.</p>
+            ) : (
+              <div className="space-y-4">
+                {comments.map((c) => (
+                  <div key={c.id} className="border-l-2 border-gray-200 pl-3">
+                    <div className="flex items-center gap-2 text-xs text-gray-500 mb-1">
+                      <span className="font-medium text-gray-700">{c.author.firstName} {c.author.lastName}</span>
+                      <span>{new Date(c.createdAt).toLocaleString()}</span>
+                      {c.isEdited && <span className="italic">(edited)</span>}
+                    </div>
+                    {editingId === c.id ? (
+                      <div className="space-y-2">
+                        <Textarea value={editBody} onChange={(e) => setEditBody(e.target.value)} rows={2} />
+                        <div className="flex gap-2">
+                          <Button size="sm" disabled={submitting} onClick={() => handleEdit(c.id, editBody)}>Save</Button>
+                          <Button size="sm" variant="outline" onClick={() => setEditingId(null)}>Cancel</Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-700 whitespace-pre-wrap">{c.body}</p>
+                    )}
+                    <div className="flex gap-2 mt-1">
+                      {canAdd && (
+                        <button
+                          className="text-xs text-blue-500 hover:underline"
+                          onClick={() => { setReplyTo(c.id); setReplyBody(""); }}
+                        >
+                          Reply
+                        </button>
+                      )}
+                      {(canManageC) && editingId !== c.id && (
+                        <>
+                          <button
+                            className="text-xs text-gray-400 hover:underline"
+                            onClick={() => { setEditingId(c.id); setEditBody(c.body); }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="text-xs text-red-400 hover:underline"
+                            onClick={() => handleDelete(c.id)}
+                          >
+                            Delete
+                          </button>
+                        </>
+                      )}
+                    </div>
+
+                    {replyTo === c.id && (
+                      <div className="mt-2 ml-4 space-y-2">
+                        <Textarea
+                          placeholder="Write a reply…"
+                          value={replyBody}
+                          onChange={(e) => setReplyBody(e.target.value)}
+                          rows={2}
+                        />
+                        <div className="flex gap-2">
+                          <Button size="sm" disabled={submitting || !replyBody.trim()} onClick={() => handlePost(replyBody, c.id)}>Post</Button>
+                          <Button size="sm" variant="outline" onClick={() => setReplyTo(null)}>Cancel</Button>
+                        </div>
+                      </div>
+                    )}
+
+                    {c.replies.length > 0 && (
+                      <div className="mt-3 ml-4 space-y-3">
+                        {c.replies.map((r) => (
+                          <div key={r.id} className="border-l-2 border-gray-100 pl-3">
+                            <div className="flex items-center gap-2 text-xs text-gray-500 mb-1">
+                              <span className="font-medium text-gray-700">{r.author.firstName} {r.author.lastName}</span>
+                              <span>{new Date(r.createdAt).toLocaleString()}</span>
+                              {r.isEdited && <span className="italic">(edited)</span>}
+                            </div>
+                            <p className="text-sm text-gray-700 whitespace-pre-wrap">{r.body}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {canAdd && (
+              <div className="border-t border-gray-100 pt-4 space-y-2">
+                <Label className="text-xs">Add Comment</Label>
+                <Textarea
+                  placeholder="Write a comment…"
+                  value={newBody}
+                  onChange={(e) => setNewBody(e.target.value)}
+                  rows={3}
+                />
+                <Button
+                  size="sm"
+                  disabled={submitting || !newBody.trim()}
+                  onClick={() => handlePost(newBody)}
+                >
+                  {submitting ? "Posting…" : "Post Comment"}
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function SkusTab({
   customerId,
   canManage,
@@ -720,6 +951,10 @@ function SkusTab({
   const [calcResult, setCalcResult] = React.useState<CalculationResult>(null);
   const [calcLoading, setCalcLoading] = React.useState(false);
   const [recalculating, setRecalculating] = React.useState<string | null>(null);
+  const [reviewSkuId, setReviewSkuId] = React.useState<string | null>(null);
+  const [reviewAction, setReviewAction] = React.useState<string>("");
+  const [reviewNote, setReviewNote] = React.useState("");
+  const [reviewLoading, setReviewLoading] = React.useState(false);
 
   async function load() {
     const [skuRes, prodRes] = await Promise.all([
@@ -781,6 +1016,24 @@ function SkusTab({
     setCalcLoading(false);
   }
 
+  async function handleReviewAction() {
+    if (!reviewSkuId || !reviewAction) return;
+    setReviewLoading(true);
+    try {
+      await fetch(`/api/customers/${customerId}/skus/${reviewSkuId}/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: reviewAction, ...(reviewNote ? { note: reviewNote } : {}) }),
+      });
+      setReviewSkuId(null);
+      setReviewAction("");
+      setReviewNote("");
+      await load();
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       {/* Calculation detail dialog */}
@@ -800,6 +1053,35 @@ function SkusTab({
               No calculation on record. Click &quot;Recalculate&quot; to run the engine.
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Review action dialog */}
+      <Dialog open={!!reviewSkuId} onOpenChange={(open) => { if (!open) { setReviewSkuId(null); setReviewAction(""); setReviewNote(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {reviewAction === "request" && "Request Review"}
+              {reviewAction === "approve" && "Approve Review"}
+              {reviewAction === "escalate" && "Escalate Review"}
+              {reviewAction === "reset" && "Reset to Pending"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-2 space-y-2">
+            <Label>Note (optional)</Label>
+            <Textarea
+              value={reviewNote}
+              onChange={(e) => setReviewNote(e.target.value)}
+              placeholder="Add a note…"
+              rows={2}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setReviewSkuId(null); setReviewAction(""); setReviewNote(""); }}>Cancel</Button>
+            <Button disabled={reviewLoading} onClick={handleReviewAction}>
+              {reviewLoading ? "Saving…" : "Confirm"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -901,6 +1183,46 @@ function SkusTab({
                           {recalculating === s.id ? "…" : "Calc"}
                         </Button>
                       )}
+                      {s.reviewStatus === "PENDING" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs text-blue-500"
+                          onClick={() => { setReviewSkuId(s.id); setReviewAction("request"); }}
+                        >
+                          Request Review
+                        </Button>
+                      )}
+                      {s.reviewStatus === "UNDER_REVIEW" && canManage && (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs text-green-600"
+                            onClick={() => { setReviewSkuId(s.id); setReviewAction("approve"); }}
+                          >
+                            Approve
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs text-orange-500"
+                            onClick={() => { setReviewSkuId(s.id); setReviewAction("escalate"); }}
+                          >
+                            Escalate
+                          </Button>
+                        </>
+                      )}
+                      {(s.reviewStatus === "APPROVED" || s.reviewStatus === "ESCALATED") && canManage && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs text-gray-500"
+                          onClick={() => { setReviewSkuId(s.id); setReviewAction("reset"); }}
+                        >
+                          Reset
+                        </Button>
+                      )}
                       {canManage && (
                         <Button
                           variant="ghost"
@@ -935,6 +1257,8 @@ export default function CustomerDetailPage() {
   const canManageMargin = permissions.includes("manage_margin_requirements");
   const canManageSkus = permissions.includes("manage_customer_skus");
   const canRunCalcs = permissions.includes("run_calculations");
+  const canAddComments = permissions.includes("add_comments");
+  const canManageComments = permissions.includes("manage_comments");
 
   const [customer, setCustomer] = React.useState<Customer | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -1002,6 +1326,7 @@ export default function CustomerDetailPage() {
             <TabsTrigger value="allocations">Allocations</TabsTrigger>
             <TabsTrigger value="margin">Margin Requirements</TabsTrigger>
             <TabsTrigger value="skus">SKUs</TabsTrigger>
+            <TabsTrigger value="comments">Comments</TabsTrigger>
           </TabsList>
 
           {/* Profile */}
@@ -1072,6 +1397,11 @@ export default function CustomerDetailPage() {
           {/* SKUs */}
           <TabsContent value="skus" className="mt-4">
             <SkusTab customerId={customerId} canManage={canManageSkus} canRunCalcs={canRunCalcs} />
+          </TabsContent>
+
+          {/* Comments */}
+          <TabsContent value="comments" className="mt-4">
+            <CommentsTab customerId={customerId} permissions={permissions} />
           </TabsContent>
         </Tabs>
       </div>
