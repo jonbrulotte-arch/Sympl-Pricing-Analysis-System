@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
-import { checkCustomerAccess } from "@/server/authorization/check-customer-access";
+import { checkCustomerAccess, getAssignedCustomerIds } from "@/server/authorization/check-customer-access";
 import { Permission } from "@/server/authorization/permissions";
 import { logAction, AuditAction } from "./audit-log.service";
 import type { AlertType, AlertSeverity } from "@/generated/prisma/client";
@@ -235,4 +235,81 @@ export async function resolveAlert(
     beforeValue: { status: alert.status },
     afterValue: { status: "RESOLVED" },
   });
+}
+
+export interface GlobalAlertParams {
+  page: number;
+  pageSize: number;
+  severity?: string;
+  status?: string;
+  alertType?: string;
+  customerId?: string;
+}
+
+export async function listGlobalAlerts(
+  userId: string,
+  userPermissions: string[],
+  params: GlobalAlertParams
+) {
+  if (!userPermissions.includes(Permission.VIEW_ALERTS)) {
+    throw new ForbiddenError("view_alerts permission required");
+  }
+
+  const { page, pageSize, severity, status, alertType, customerId } = params;
+
+  const where: Record<string, unknown> = {};
+
+  if (!userPermissions.includes(Permission.GLOBAL_CUSTOMER_ACCESS)) {
+    const assignedIds = await getAssignedCustomerIds(userId);
+    where.customerSku = { customerId: { in: assignedIds } };
+  }
+
+  if (severity) where.severity = severity;
+  if (status) where.status = status;
+  if (alertType) where.alertType = alertType;
+  if (customerId) {
+    where.customerSku = { ...(where.customerSku as object ?? {}), customerId };
+  }
+
+  const [alerts, total] = await Promise.all([
+    db.alert.findMany({
+      where,
+      orderBy: [{ severity: "asc" }, { triggeredAt: "desc" }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      include: {
+        customerSku: {
+          select: {
+            id: true,
+            customer: { select: { id: true, name: true, code: true } },
+            product: { select: { sku: true, name: true } },
+          },
+        },
+        history: {
+          orderBy: { createdAt: "asc" },
+          include: { changedBy: { select: { id: true, firstName: true, lastName: true } } },
+        },
+      },
+    }),
+    db.alert.count({ where }),
+  ]);
+
+  return { data: alerts, total, page, pageSize };
+}
+
+export async function getAlertWithAccess(
+  alertId: string,
+  userId: string,
+  userPermissions: string[]
+) {
+  const alert = await db.alert.findUnique({
+    where: { id: alertId },
+    include: { customerSku: { select: { customerId: true } } },
+  });
+  if (!alert) throw new NotFoundError("Alert");
+
+  const hasAccess = await checkCustomerAccess(userId, alert.customerSku.customerId, userPermissions);
+  if (!hasAccess) throw new ForbiddenError("Access to this customer is denied");
+
+  return alert;
 }
